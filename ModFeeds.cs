@@ -1,4 +1,4 @@
-// ModFeeds.cs (Revision 2)
+// ModFeeds.cs (Revision 3)
 // Find and read the data other Railroader mods share, and share your own. Every mod that carries this file uses one
 // shared list of feeds in the game, so a feed any mod publishes can be found and read by every other mod.
 //
@@ -9,6 +9,10 @@
 //   3. Publish: ModFeeds.Publish("my-feed", MyFeed.Read, "My data", "My Mod", "1.0.0", 1, fields) when your mod is
 //      switched on, and ModFeeds.Withdraw("my-feed") when it is switched off. Call both, and Read, on the game's main
 //      thread.
+//   4. Read a key: if (ModFeeds.TryGetDouble(answer, "carsWaiting", 1, out double cars)) { ... }
+//      The 1 is the api your reader was written for. A feed on a newer api is read just the same: only a key its
+//      "changed" map lists above 1, and a missing key or one of another kind, is skipped (the call says false; log
+//      that once). Never switch a feed off because its api is newer than the one you know.
 //
 // RULES (for a feed you publish)
 //   - Your read function returns plain data only: Dictionary<string, object>, List<object>, string, bool, int, long,
@@ -17,6 +21,10 @@
 //   - It never throws, changes nothing, and is cheap enough to call every couple of seconds. It runs on the game's main
 //     thread.
 //   - No file paths, account names or machine names in an answer or in the description you publish.
+//   - When a key's meaning changes (its unit, scale, what it counts, its type), bump api and list the key in a
+//     top-level "changed" map (a Dictionary<string, object>) in the answer: { "key": api }, the api where its meaning last changed. Keys you only
+//     add stay out of it. Readers use it to skip just that key and keep reading the rest, so keep every other key
+//     as it was: prefer a new key to changing an old one, and never rename one.
 //   - Describe every top-level field in `fields`, units included, so anyone who finds the feed knows what it means.
 //   - If you change this file, bump Revision and keep the shared contract below exactly: it is what lets copies of any
 //     revision, from any author, work together.
@@ -52,7 +60,7 @@ namespace MODFEEDS_NAMESPACE
 {
     internal static class ModFeeds
     {
-        internal const int Revision = 2;
+        internal const int Revision = 3;
 
         private const string SlotKey = "ashenmare.feeds.v1";
         private const int MaxIdLength = 64;
@@ -150,6 +158,87 @@ namespace MODFEEDS_NAMESPACE
             }
             catch { }
             return list;
+        }
+
+        // ---- Reading an answer (Revision 3) ----
+        // For a reader that knows a feed as of api knownApi. Each Try call returns false, and never throws, when the answer
+        // isn't a dictionary, is an error answer, has no such key, has one of another kind, or lists the key in its
+        // "changed" map at an api above knownApi. A feed on a newer api is otherwise read like any other.
+
+        // The answer's "api" (an int), or 0 when it has none.
+        internal static int ApiOf(object answer)
+        {
+            try
+            {
+                return answer is IDictionary<string, object> d && d.TryGetValue("api", out object v) && v is int a
+                    ? a : 0;
+            }
+            catch { return 0; }
+        }
+
+        // The api at which the answer's "changed" map says key last changed; 0 when it isn't listed or there is no
+        // map (absent or null "changed"); int.MaxValue, so the key is skipped, when the key can't be vouched for: its api
+        // isn't a whole number, "changed" is present but isn't a Dictionary<string, object>, or reading it throws.
+        internal static int ChangedAt(object answer, string key)
+        {
+            try
+            {
+                if (key == null || !(answer is IDictionary<string, object> d)) return 0;
+                if (!d.TryGetValue("changed", out object m) || m == null) return 0;
+                if (!(m is IDictionary<string, object> map)) return int.MaxValue;
+                if (!map.TryGetValue(key, out object v)) return 0;
+                if (v is int i) return i;
+                if (v is long l && l >= int.MinValue && l <= int.MaxValue) return (int)l;
+                return int.MaxValue;
+            }
+            catch { return int.MaxValue; }
+        }
+
+        // The key's value as the feed gave it.
+        internal static bool TryGet(object answer, string key, int knownApi, out object value)
+        {
+            value = null;
+            try
+            {
+                if (key == null || !(answer is IDictionary<string, object> d) || d.ContainsKey("error")) return false;
+                if (!d.TryGetValue(key, out object v) || v == null) return false;
+                if (ChangedAt(answer, key) > knownApi) return false;
+                value = v;
+                return true;
+            }
+            catch { value = null; return false; }
+        }
+
+        // A number (int, long, float or double, finite) as a double.
+        internal static bool TryGetDouble(object answer, string key, int knownApi, out double value)
+        {
+            value = 0;
+            if (!TryGet(answer, key, knownApi, out object v)) return false;
+            double x;
+            if (v is double dd) x = dd;
+            else if (v is int i) x = i;
+            else if (v is long l) x = l;
+            else if (v is float f) x = f;
+            else return false;
+            if (double.IsNaN(x) || double.IsInfinity(x)) return false;
+            value = x;
+            return true;
+        }
+
+        internal static bool TryGetBool(object answer, string key, int knownApi, out bool value)
+        {
+            value = false;
+            if (!TryGet(answer, key, knownApi, out object v) || !(v is bool b)) return false;
+            value = b;
+            return true;
+        }
+
+        internal static bool TryGetString(object answer, string key, int knownApi, out string value)
+        {
+            value = null;
+            if (!TryGet(answer, key, knownApi, out object v) || !(v is string s)) return false;
+            value = s;
+            return true;
         }
 
         // A feed's answer, or { feed, error } when it isn't loaded or its read threw. Never throws.

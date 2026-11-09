@@ -3,7 +3,7 @@
 A small shared standard for Railroader mods to share data with each other. A mod **publishes** a feed: a name, a
 description of what it holds, and a function that returns its data. Any other mod can **find** every feed loaded in the
 game and **read** it, with no dependency on the mod that made it. One file, dropped into your project: nothing for
-players to install. For Railroader 0.6.2 (Experimental branch), C# 7 or newer. MIT license. Revision 2.
+players to install. For Railroader 0.6.2 (Experimental branch), C# 7 or newer. MIT license. Revision 3 adds the reading helpers and the `changed` map.
 
 ## Use it
 
@@ -31,6 +31,32 @@ milliseconds)` also says how long the feed took.
 
 An answer is the publisher's data, handed over as is. Treat it as read only, ignore keys you don't know, and expect it
 to be large or deeply nested now and then: if you walk it, cap how deep and how many items you go.
+
+### Keep reading when a feed's api is newer
+
+A feed can move on without leaving you behind: a newer `api` may still carry every key you use. Don't switch a feed
+off because its api is higher than the one you wrote your reader for. Read each key you need by name and kind, and
+skip only the one that isn't safe:
+
+```csharp
+object answer = ModFeeds.Read("cars-waiting");
+if (ModFeeds.TryGetDouble(answer, "carsWaiting", 1, out double cars))
+{
+    // use cars: the feed may be on api 2 or 5, this key still means what it did at api 1
+}
+else
+{
+    // log once: missing, another kind, an error answer, or the feed says this key's meaning changed after api 1
+}
+```
+
+The `1` is the api you wrote your reader for. `TryGet` (any value), `TryGetDouble` (int, long, float or double, finite),
+`TryGetBool` and `TryGetString` return `false`, and never throw, when the answer is an error or isn't a dictionary,
+the key is missing or of another kind, or the answer's `changed` map lists the key at an api above the one you pass.
+`ApiOf(answer)` is the answer's `api` (0 if none), and `ChangedAt(answer, key)` the api its `changed` map gives for a
+key (0 if not listed, `int.MaxValue` if the entry isn't a whole number, so it can't be vouched for). A `changed` map
+that is present but isn't a `Dictionary<string, object>` gives `int.MaxValue` for every key, so those keys are skipped;
+an absent or null one gives 0.
 
 ### Publish a feed
 
@@ -79,7 +105,7 @@ internal static class MyFeed
 - `read`: your function that returns the answer.
 - `title`: a short name people see, like "Cars waiting".
 - `mod`: your mod's name, and `version` its version, as players see them.
-- `api`: your schema version, an int you bump when a field changes meaning.
+- `api`: your schema version, an int you bump when a field changes meaning (and list that field in `changed`).
 - `fields`: one line per top-level key of your answer, saying what it means, with units.
 
 It returns `false` when the id is taken by another mod or isn't a valid id, so check it. Railroader keeps a mod's code
@@ -102,7 +128,9 @@ Publishing again from the same mod replaces its own entry, and Withdraw removes 
 - **Plain data only:** `Dictionary<string, object>`, `List<object>`, `string`, `bool`, `int`, `long`, `float`, `double`
   or `null`, nested as deep as you need. Never your own types or the game's.
 - **Start with `"api"` and `"feed"`:** your schema version and the feed's id. Use camelCase keys. No NaN or infinity.
-- **Add, don't change:** a new key is fine within an `api` version; a key that changes meaning means a new `api`.
+- **Add, don't change:** a new key is fine within an `api` version. A key that changes meaning means a new `api`, and
+  the key goes in a top-level `"changed"` map in the answer: `{ "rate": 2 }`, the api where its meaning last changed.
+  Added keys stay out of it. Prefer a new key to changing an old one, and never rename a key.
 - **Never throw.** On a failure, return `{ "api", "feed", "error" }` instead.
 - **Change nothing.** Reading a feed has no side effects.
 - **Cheap:** a reader may call it every couple of seconds, on the game's main thread.
