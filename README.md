@@ -3,7 +3,7 @@
 A small shared standard for Railroader mods to share data with each other. A mod **publishes** a feed: a name, a
 description of what it holds, and a function that returns its data. Any other mod can **find** every feed loaded in the
 game and **read** it, with no dependency on the mod that made it. One file, dropped into your project: nothing for
-players to install. For Railroader 0.6.2 (Experimental branch), C# 7 or newer. MIT license. Revision 3 adds the reading helpers and the `changed` map.
+players to install. For Railroader 0.6.2 and 0.6.3 (Experimental branch), C# 7 or newer. MIT license. Revision 3 adds the reading helpers and the `changed` map.
 
 ## Use it
 
